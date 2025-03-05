@@ -292,60 +292,42 @@ module.exports = function webflowPlugin(){
 
 				
 				const additionalUrls = [];
-
-				// Load Collection IDs from Vercel Environment Variable
-				const COLLECTION_IDS = process.env.WEBFLOW_COLLECTION_IDS
-				    ? process.env.WEBFLOW_COLLECTION_IDS.split(",") // Convert to array
-				    : [];
-				
-				const API_KEY = process.env.WEBFLOW_API_KEY;
+				const { WEBFLOW_COLLECTION_IDS, WEBFLOW_API_KEY, URL } = process.env;
 				const API_BASE = "https://api.webflow.com/v2/collections/";
-				
-				// Check if API_KEY, COLLECTION_IDS, and URL are set before running
-				if (!API_KEY || !COLLECTION_IDS.length || !process.env.URL) {
-				    console.error("Missing required environment variables. Ensure WEBFLOW_API_KEY, WEBFLOW_COLLECTION_IDS, and URL are set.");
-				    process.exit(1);
+
+				if (WEBFLOW_API_KEY && WEBFLOW_COLLECTION_IDS) {
+					const COLLECTION_IDS = WEBFLOW_COLLECTION_IDS.split(",");
+
+					async function fetchBlogPosts() {
+						for (const id of COLLECTION_IDS) {
+							try {
+								const headers = { "Authorization": `Bearer ${WEBFLOW_API_KEY}`, "accept-version": "2.0.0" };
+								const collectionRes = await fetch(`${API_BASE}${id}`, { headers });
+								const collectionData = await collectionRes.json();
+								const collectionSlug = collectionData.slug || "unknown-collection";
+
+								const res = await fetch(`${API_BASE}${id}/items`, { headers });
+								const data = await res.json();
+
+								data.items?.forEach(item => {
+									if (item.fieldData?.slug) additionalUrls.push(`${URL}${collectionSlug}/${item.fieldData.slug}`);
+								});
+
+							} catch (error) {
+								console.error(`❌ Error fetching collection ${id}:`, error);
+							}
+						}
+						console.log("✅ All Blog URLs:", additionalUrls);
+					}
+
+					await fetchBlogPosts();
 				}
 
-				
-				async function fetchBlogPosts() {
-				    for (const id of COLLECTION_IDS) {
-				        try {
-				            const collectionRes = await fetch(`${API_BASE}${id}`, {
-				                headers: { "Authorization": `Bearer ${API_KEY}`, "accept-version": "2.0.0" }
-				            });
-				            const collectionData = await collectionRes.json();
-				            const collectionSlug = collectionData.slug || "unknown-collection";
-				
-				            const res = await fetch(`${API_BASE}${id}/items`, {
-				                headers: { "Authorization": `Bearer ${API_KEY}`, "accept-version": "2.0.0" }
-				            });
-				            const data = await res.json();
-				
-				            data.items?.forEach(item => {
-				                const slug = item.fieldData?.slug;
-				                if (slug) additionalUrls.push(`${process.env.URL}${collectionSlug}/${slug}`);
-				            });
-				
-				        } catch (error) {
-				            console.error(`Error fetching collection ${id}:`, error);
-				        }
-				    }
-				    console.log("✅ All Blog URLs:", additionalUrls);
+				// Add additional URLs only if available
+				if (additionalUrls.length) {
+					additionalUrls.forEach(url => $('urlset').append(`<url><loc>${url}</loc></url>`));
 				}
-				
-				// Run the function
-				await fetchBlogPosts();
 
-
-
-
-				// Add additional URLs to the sitemap
-				additionalUrls.forEach(url => {
-					const $urlNode = $(`<url></url>`);
-					$urlNode.append(`<loc>${url}</loc>`);
-					$('urlset').append($urlNode);
-				});
 
 				const newXml = $.xml();
 				console.log(`Writing updated Sitemap with all URLs...`);
