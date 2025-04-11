@@ -10,6 +10,8 @@ const postcssWebp = require(`webp-in-css/plugin`)
 const { exists } = require('fs-extra')
 const inlineCriticalCss = require(`netlify-plugin-inline-critical-css`).onPostBuild
 const imageOptim = require(`netlify-plugin-image-optim`).onPostBuild
+const { existsSync, writeFileSync } = require('fs');
+
 
 webp.grant_permission()
 let origin = process.env.WEBFLOW_URL
@@ -42,8 +44,9 @@ let inlineCss = toBool(process.env.INLINE_CSS)
 let replaceRobotsTxt = toBool(process.env.REPLACE_ROBOTS_TXT)
 
 module.exports = function webflowPlugin(){
-	let excludeFromSitemap = []
-
+	let excludeFromSitemap = [];
+	let activeUrls = [];
+	
 	return function(){
 
 		// Parse CSS for webp images
@@ -86,28 +89,6 @@ module.exports = function webflowPlugin(){
 
 			// Add CryoLayer generator meta tag
 			$head.append(`<meta name="generator" content="CryoLayer" />`)
-
-			// Make webfonts.js async
-			// let webfontsJs = `{}`
-			// let webfontsSrc = ``
-			// $(`script`).each((i, el) => {
-			// 	const $el = $(el)
-			// 	const src = $el.attr(`src`)
-			// 	const contents = get(el, `children.0.data`, ``)
-			// 	if (
-			// 		src &&
-			// 		src.indexOf(`googleapis.com`) > -1 &&
-			// 		src.indexOf(`webfont.js`) > -1
-			// 	) {
-			// 		webfontsSrc = src
-			// 		$el.remove()
-			// 	}
-			// 	if(contents && contents.indexOf(`WebFont.load({`) === 0){
-			// 		webfontsJs = contents.replace(`WebFont.load(`, ``).replace(`);`, ``)
-			// 		$el.remove()
-			// 	}
-			// })
-			// $head.append(`<script>WebFontConfig=${webfontsJs},function(e){var o=e.createElement("script"),t=e.scripts[0];o.src="${webfontsSrc}",o.async=!0,t.parentNode.insertBefore(o,t)}(document);</script>`)
 
 			// Fix cross-origin links
 			$(`a`).each((i, el) => {
@@ -154,6 +135,10 @@ module.exports = function webflowPlugin(){
 			if(name === `index.html` && dir){
 				obj.outputPath = dist + parts.join(`/`) + `/` + dir + `.html`
 			}
+			
+			activeUrls.push(process.env.URL.replace(/\/$/, '') + parts.join('/') + '/' + dir);
+
+
 		})
 
 		this.on(`complete`, async () => {
@@ -252,87 +237,112 @@ module.exports = function webflowPlugin(){
 				return url
 			})
 			const xmlFiles = await globby(join(dist, `**/*.xml`))
+			console.log(activeUrls);
+      if (xmlFiles.length === 0) {
+        // If xmlFiles is empty, we will create a new sitemap.xml using activeUrls
+        console.log("No existing XML files found. Creating a new sitemap.xml...");
 
-			for(let xmlPath of xmlFiles){
-				const xmlStr = await readFile(xmlPath, `utf8`)
-				const $ = cheerio.load(xmlStr, {
-					decodeEntities: false,
-					xmlMode: true,
-				})
-				$(`url`).each((_, el) => {
-					const $url = $(el);
-					const loc = $url.find(`loc`);
-					const link = $url.find(`xhtml\\:link`);
-					// Sept. 4, 2023: Update Sitemap URL
-					let url = loc.text().trim(); // Use let instead of const
+        // Generate the sitemap XML structure
+        const $ = cheerio.load("<urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'></urlset>", {
+          xmlMode: true,
+        });
 
-					const webflowUrlWithoutSlash = process.env.WEBFLOW_URL.replace(/\/$/, '');
-					console.log('Original URL:', url);
-					console.log('WEBFLOW_URL:', process.env.WEBFLOW_URL);
-					console.log('Updated URL:', process.env.URL);
-					// REPLACE WEBFLOW URL WITH Official URL
-					// url = url.replace(process.env.WEBFLOW_URL, process.env.URL);
-					// Check if the original URL is equal to the Webflow URL
-					if (url === webflowUrlWithoutSlash) {
-						// Force update to use the updated URL
-						url = process.env.URL;
-					} else {
-						// Update the URL by replacing the Webflow URL with the updated URL
-						url = url.replace(process.env.WEBFLOW_URL, process.env.URL);
-					}
-					
-					console.log('Final URL:', url);
-					if (excludeFromSitemap.indexOf(url) > -1) {
-					  $url.remove();
-					}
-					// Update both the <loc> content and the href attribute
-					loc.text(url);
-					link.attr('href', url);
-				});
+        // activeUrls.forEach(url => {
+        //   $('urlset').append(`<url><loc>${url}</loc></url>`);
+        // });
+	unique = [...new Set(activeUrls)];
 
-				
-				const additionalUrls = [];
-				const { WEBFLOW_COLLECTION_IDS, WEBFLOW_API_KEY, URL } = process.env;
-				const API_BASE = "https://api.webflow.com/v2/collections/";
+	unique.forEach(url => {
+          $('urlset').append(`<url><loc>${url}</loc></url>`);
+        });
 
-				if (WEBFLOW_API_KEY && WEBFLOW_COLLECTION_IDS) {
-					const COLLECTION_IDS = WEBFLOW_COLLECTION_IDS.split(",");
+        const newXml = $.xml();
+        const sitemapPath = join(dist, 'sitemap.xml');
+        await outputFile(sitemapPath, newXml);
 
-					async function fetchBlogPosts() {
-						for (const id of COLLECTION_IDS) {
-							try {
-								const headers = { "Authorization": `Bearer ${WEBFLOW_API_KEY}`, "accept-version": "2.0.0" };
-								const collectionRes = await fetch(`${API_BASE}${id}`, { headers });
-								const collectionData = await collectionRes.json();
-								const collectionSlug = collectionData.slug || "unknown-collection";
+        console.log('sitemap.xml has been created.');
+      } else {
+        for(let xmlPath of xmlFiles){
+          const xmlStr = await readFile(xmlPath, `utf8`)
+          const $ = cheerio.load(xmlStr, {
+            decodeEntities: false,
+            xmlMode: true,
+          })
+          $(`url`).each((_, el) => {
+            const $url = $(el);
+            const loc = $url.find(`loc`);
+            const link = $url.find(`xhtml\\:link`);
+            // Sept. 4, 2023: Update Sitemap URL
+            let url = loc.text().trim(); // Use let instead of const
 
-								const res = await fetch(`${API_BASE}${id}/items`, { headers });
-								const data = await res.json();
+            const webflowUrlWithoutSlash = process.env.WEBFLOW_URL.replace(/\/$/, '');
+            console.log('Original URL:', url);
+            console.log('WEBFLOW_URL:', process.env.WEBFLOW_URL);
+            console.log('Updated URL:', process.env.URL);
+            // REPLACE WEBFLOW URL WITH Official URL
+            // url = url.replace(process.env.WEBFLOW_URL, process.env.URL);
+            // Check if the original URL is equal to the Webflow URL
+            if (url === webflowUrlWithoutSlash) {
+              // Force update to use the updated URL
+              url = process.env.URL;
+            } else {
+              // Update the URL by replacing the Webflow URL with the updated URL
+              url = url.replace(process.env.WEBFLOW_URL, process.env.URL);
+            }
+            
+            console.log('Final URL:', url);
+            if (excludeFromSitemap.indexOf(url) > -1) {
+              $url.remove();
+            }
+            // Update both the <loc> content and the href attribute
+            loc.text(url);
+            link.attr('href', url);
+          });
 
-								data.items?.forEach(item => {
-									if (item.fieldData?.slug) additionalUrls.push(`${URL}${collectionSlug}/${item.fieldData.slug}`);
-								});
+          
+          const additionalUrls = [];
+          const { WEBFLOW_COLLECTION_IDS, WEBFLOW_API_KEY, URL } = process.env;
+          const API_BASE = "https://api.webflow.com/v2/collections/";
 
-							} catch (error) {
-								console.error(`❌ Error fetching collection ${id}:`, error);
-							}
-						}
-						console.log("✅ All Blog URLs:", additionalUrls);
-					}
+          if (WEBFLOW_API_KEY && WEBFLOW_COLLECTION_IDS) {
+            const COLLECTION_IDS = WEBFLOW_COLLECTION_IDS.split(",");
 
-					await fetchBlogPosts();
-				}
+            async function fetchBlogPosts() {
+              for (const id of COLLECTION_IDS) {
+                try {
+                  const headers = { "Authorization": `Bearer ${WEBFLOW_API_KEY}`, "accept-version": "2.0.0" };
+                  const collectionRes = await fetch(`${API_BASE}${id}`, { headers });
+                  const collectionData = await collectionRes.json();
+                  const collectionSlug = collectionData.slug || "unknown-collection";
 
-				// Add additional URLs only if available
-				if (additionalUrls.length) {
-					additionalUrls.forEach(url => $('urlset').append(`<url><loc>${url}</loc></url>`));
-				}
+                  const res = await fetch(`${API_BASE}${id}/items`, { headers });
+                  const data = await res.json();
+
+                  data.items?.forEach(item => {
+                    if (item.fieldData?.slug) additionalUrls.push(`${URL}${collectionSlug}/${item.fieldData.slug}`);
+                  });
+
+                } catch (error) {
+                  console.error(`❌ Error fetching collection ${id}:`, error);
+                }
+              }
+              console.log("✅ All Blog URLs:", additionalUrls);
+            }
+
+            await fetchBlogPosts();
+          }
+
+          // Add additional URLs only if available
+          if (additionalUrls.length) {
+            additionalUrls.forEach(url => $('urlset').append(`<url><loc>${url}</loc></url>`));
+          }
 
 
-				const newXml = $.xml();
-				console.log(`Writing updated Sitemap with all URLs...`);
-				await outputFile(xmlPath, newXml);
-			}
+          const newXml = $.xml();
+          console.log(`Writing updated Sitemap with all URLs...`);
+          await outputFile(xmlPath, newXml);
+        }
+      }
 
 
 			// Write redirects file
