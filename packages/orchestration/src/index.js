@@ -4,6 +4,9 @@ const sitemaps = require('sitemap-stream-parser')
 
 // Exit if environment variables are missing
 let siteUrl = process.env.WEBFLOW_URL
+
+let siteDirectories = process.env.WEBFLOW_DIRECTORIES
+
 let destinationOrigin = process.env.URL || process.env.VERCEL_URL || process.env.DEPLOY_URL
 if(!siteUrl){
 	console.error(`No "WEBFLOW_URL" environment variable set.`)
@@ -38,6 +41,19 @@ if(process.env.BCP){
 	entry.push(`${siteUrl}/sitemap.xml`)
 }
 
+
+if (siteDirectories) {
+  console.log('Adding site directory');
+	
+  siteDirectories
+    .split(',')
+    .map(path => path.trim())
+    .filter(Boolean)
+    .forEach(path => entry.push(`${siteUrl}/${path}`));
+	
+}
+
+
 sitemaps.parseSitemaps(`${siteUrl}/sitemap.xml`, function(url) { 
   entry.push(url);
 }, function(err, sitemaps) {
@@ -58,4 +74,3 @@ sitemaps.parseSitemaps(`${siteUrl}/sitemap.xml`, function(url) {
 		],
 	})
 });
-
